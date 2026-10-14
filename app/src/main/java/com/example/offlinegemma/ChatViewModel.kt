@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.speech.tts.TextToSpeech
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class ChatMessage(val id: Long, val text: String, val isUser: Boolean)
+data class Conversation(val id: Long, val title: String, val updatedAt: Long, val messages: List<ChatMessage>)
+
+enum class Screen { HOME, CHAT, MODELS, SETTINGS }
 
 sealed interface ModelState {
     data object NotLoaded : ModelState
@@ -24,15 +28,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app get() = getApplication<Application>()
     private val engine = LlmEngine(application)
-    private var nextId = 0L
+    private var tts: TextToSpeech? = null
 
     val modelState = MutableStateFlow<ModelState>(ModelState.NotLoaded)
-    val messages = MutableStateFlow<List<ChatMessage>>(emptyList())   // chat history (RAM only)
+    val screen = MutableStateFlow(Screen.HOME)
+    val conversations = MutableStateFlow<List<Conversation>>(emptyList())
+    val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val generating = MutableStateFlow(false)
+    val settings = MutableStateFlow(SettingsStore.load(application))
+    val currentTitle = MutableStateFlow("New chat")
+
+    private var currentId: Long? = null
+    private var nextMsgId = 0L
+    private var sessionReady = false
+    private var genId = 0
 
     init {
-        if (ModelManager.modelFile(app).exists()) loadModel()
+        conversations.value = ChatStore.load(app)
+        tts = TextToSpeech(app) { }
+        if (ModelManager.modelFile(app).exists()) {
+            modelState.value = ModelState.Working("Loading Gemma...", null)
+            loadModel()
+        }
     }
+
+    fun navigate(s: Screen) { screen.value = s }
+
+    fun modelSizeMb(): Int = (ModelManager.modelFile(app).length() / (1024 * 1024)).toInt()
+
+    // ---------------- model loading ----------------
 
     fun loadModel() {
         viewModelScope.launch(Dispatchers.Default) {
@@ -57,10 +81,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 return@launch
             }
-            modelState.value = ModelState.Working("Loading model... (can take up to a minute)", null)
+            modelState.value = ModelState.Working("Loading Gemma...", null)
             try {
-                engine.load(file.absolutePath)
-                messages.value = emptyList()
+                engine.load(file.absolutePath, settings.value.maxTokens)
+                sessionReady = false
                 modelState.value = ModelState.Ready
             } catch (e: OutOfMemoryError) {
                 modelState.value = ModelState.Failed("Ran out of memory while loading the model.")
@@ -73,8 +97,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun reloadModel() {
+        if (generating.value) stop()
+        sessionReady = false
+        loadModel()
+    }
+
     fun importModel(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
+            engine.close()
             modelState.value = ModelState.Working("Copying model into the app...", 0f)
             try {
                 ModelManager.importFromUri(app, uri) {
@@ -101,40 +132,119 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteModel() {
+        if (generating.value) stop()
+        engine.close()
+        ModelManager.modelFile(app).delete()
+        sessionReady = false
+        modelState.value = ModelState.NotLoaded
+    }
+
+    // ---------------- settings ----------------
+
+    fun saveSettings(s: AppSettings) {
+        SettingsStore.save(app, s)
+        settings.value = s
+        sessionReady = false   // new temperature / system prompt apply from the next message
+    }
+
+    // ---------------- chat ----------------
+
     fun send(text: String) {
         val prompt = text.trim()
         if (prompt.isEmpty() || generating.value || modelState.value !is ModelState.Ready) return
+        val history = messages.value
         generating.value = true
         messages.update {
-            it + ChatMessage(nextId++, prompt, true) + ChatMessage(nextId++, "", false)
+            it + ChatMessage(nextMsgId++, prompt, true) + ChatMessage(nextMsgId++, "", false)
         }
+        val myGen = ++genId
         viewModelScope.launch(Dispatchers.Default) {
             try {
+                if (!sessionReady) {
+                    val s = settings.value
+                    engine.startSession(s.temperature, s.systemPrompt, history)
+                    sessionReady = true
+                }
                 engine.generate(prompt) { piece, done ->
-                    // runs on MediaPipe's thread; StateFlow.update is thread-safe
+                    if (myGen != genId) return@generate
                     messages.update { list ->
                         val last = list.last()
                         list.dropLast(1) + last.copy(text = last.text + piece)
                     }
-                    if (done) generating.value = false
+                    if (done) {
+                        generating.value = false
+                        persistChat()
+                    }
                 }
             } catch (e: Throwable) {
-                messages.update { list ->
-                    val last = list.last()
-                    list.dropLast(1) + last.copy(text = last.text + "\n[Error: ${e.message}]")
+                if (myGen == genId) {
+                    messages.update { list ->
+                        val last = list.last()
+                        list.dropLast(1) + last.copy(text = last.text + "\n[Error: ${e.message}]")
+                    }
+                    sessionReady = false
+                    generating.value = false
+                    persistChat()
                 }
-                generating.value = false
             }
         }
     }
 
+    fun stop() {
+        if (!generating.value) return
+        genId++              // ignore any pieces that still arrive
+        engine.cancel()
+        generating.value = false
+        sessionReady = false // rebuild the session (with the partial reply) on the next message
+        persistChat()
+    }
+
     fun newChat() {
-        if (generating.value) return
-        try { engine.resetSession() } catch (_: Throwable) {}
+        if (generating.value) stop()
+        currentId = null
         messages.value = emptyList()
+        nextMsgId = 0
+        sessionReady = false
+        currentTitle.value = "New chat"
+    }
+
+    fun openChat(id: Long) {
+        if (generating.value) stop()
+        val c = conversations.value.firstOrNull { it.id == id } ?: return
+        currentId = c.id
+        messages.value = c.messages
+        nextMsgId = c.messages.size.toLong()
+        currentTitle.value = c.title
+        sessionReady = false
+    }
+
+    fun deleteChat(id: Long) {
+        conversations.update { list -> list.filter { it.id != id } }
+        ChatStore.save(app, conversations.value)
+        if (currentId == id) newChat()
+    }
+
+    @Synchronized
+    private fun persistChat() {
+        val msgs = messages.value.filter { it.text.isNotBlank() }
+        val first = msgs.firstOrNull { it.isUser } ?: return
+        val id = currentId ?: System.currentTimeMillis().also { currentId = it }
+        val title = first.text.trim().replace("\n", " ").take(40)
+        val conv = Conversation(id, title, System.currentTimeMillis(), msgs)
+        conversations.update { list -> listOf(conv) + list.filter { it.id != id } }
+        currentTitle.value = title
+        ChatStore.save(app, conversations.value)
+    }
+
+    fun speak(text: String) {
+        val clean = text.replace(Regex("[*`#]"), "")
+        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "gemma")
     }
 
     override fun onCleared() {
         engine.close()
+        tts?.stop()
+        tts?.shutdown()
     }
 }

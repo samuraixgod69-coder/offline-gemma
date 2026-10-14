@@ -11,9 +11,21 @@ android {
         applicationId = "com.example.offlinegemma"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        ndk { abiFilters += "arm64-v8a" }   // modern phones only -> smaller APK
+        versionCode = 2
+        versionName = "2.0"
+        ndk { abiFilters += "arm64-v8a" }
+    }
+
+    // Same signing key for every build, so new versions install OVER the old one
+    signingConfigs {
+        getByName("debug") {
+            if (file("debug.keystore").exists()) {
+                storeFile = file("debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {

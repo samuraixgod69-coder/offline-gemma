@@ -45,3 +45,8 @@ File > Open > select this folder > wait for Gradle sync > Run (or Build > Build 
 - Crash while loading / "out of memory": phone needs roughly 4 GB+ RAM; close other apps.
 - Won't load: file must be the MediaPipe `.task` file, not GGUF or safetensors.
 - Emulators are not supported by MediaPipe LLM; use a real phone.
+
+## v2 (glass UI)
+Glass-style dark UI, chat history saved on the phone, markdown replies, copy / read-aloud buttons,
+stop button, quick prompts, settings (temperature, max tokens, system prompt), model info screen, side drawer.
+Debug builds are now signed with the bundled app/debug.keystore so new versions install over old ones.

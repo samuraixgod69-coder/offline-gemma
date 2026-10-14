@@ -1,3 +1,5 @@
 <resources>
-    <style name="Theme.OfflineGemma" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.OfflineGemma" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
 </resources>
