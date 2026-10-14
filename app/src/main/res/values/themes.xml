@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.OfflineGemma" parent="android:Theme.Material.NoActionBar" />
+</resources>
