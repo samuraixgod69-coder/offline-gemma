@@ -9,7 +9,8 @@ data class AppSettings(
     val temperature: Float = 0.7f,
     val maxTokens: Int = 2048,
     val systemPrompt: String = "You are a helpful assistant. Answer clearly and keep replies concise.",
-    val userName: String = "Offline Gemma User"
+    val userName: String = "Offline Gemma User",
+    val memoryNotes: String = ""
 )
 
 object SettingsStore {
@@ -22,7 +23,8 @@ object SettingsStore {
             temperature = p.getFloat("temperature", d.temperature),
             maxTokens = p.getInt("maxTokens", d.maxTokens),
             systemPrompt = p.getString("systemPrompt", d.systemPrompt) ?: d.systemPrompt,
-            userName = p.getString("userName", d.userName) ?: d.userName
+            userName = p.getString("userName", d.userName) ?: d.userName,
+            memoryNotes = p.getString("memoryNotes", d.memoryNotes) ?: d.memoryNotes
         )
     }
 
@@ -32,6 +34,7 @@ object SettingsStore {
             .putInt("maxTokens", s.maxTokens)
             .putString("systemPrompt", s.systemPrompt)
             .putString("userName", s.userName)
+            .putString("memoryNotes", s.memoryNotes)
             .apply()
     }
 }

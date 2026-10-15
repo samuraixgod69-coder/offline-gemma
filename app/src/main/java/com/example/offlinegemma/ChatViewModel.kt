@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.content.ContentResolver
 import android.speech.tts.TextToSpeech
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,7 +16,7 @@ import kotlinx.coroutines.launch
 data class ChatMessage(val id: Long, val text: String, val isUser: Boolean)
 data class Conversation(val id: Long, val title: String, val updatedAt: Long, val messages: List<ChatMessage>)
 
-enum class Screen { HOME, CHAT, MODELS, SETTINGS }
+enum class Screen { HOME, CHAT, TOOLS, MODELS, SETTINGS }
 
 sealed interface ModelState {
     data object NotLoaded : ModelState
@@ -37,6 +38,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val generating = MutableStateFlow(false)
     val settings = MutableStateFlow(SettingsStore.load(application))
     val currentTitle = MutableStateFlow("New chat")
+    val pendingPrompt = MutableStateFlow<String?>(null)
 
     private var currentId: Long? = null
     private var nextMsgId = 0L
@@ -53,6 +55,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigate(s: Screen) { screen.value = s }
+
+    fun preparePrompt(prompt: String) {
+        pendingPrompt.value = prompt
+        screen.value = Screen.CHAT
+    }
+
+    fun consumePendingPrompt() { pendingPrompt.value = null }
 
     fun modelSizeMb(): Int = (ModelManager.modelFile(app).length() / (1024 * 1024)).toInt()
 
@@ -163,7 +172,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 if (!sessionReady) {
                     val s = settings.value
-                    engine.startSession(s.temperature, s.systemPrompt, history)
+                    val memory = s.memoryNotes.trim().takeIf { it.isNotEmpty() }
+                        ?.let { "\n\nUser memory notes (use only when relevant):\n$it" }.orEmpty()
+                    engine.startSession(s.temperature, s.systemPrompt + memory, history)
                     sessionReady = true
                 }
                 engine.generate(prompt) { piece, done ->
@@ -235,6 +246,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         conversations.update { list -> listOf(conv) + list.filter { it.id != id } }
         currentTitle.value = title
         ChatStore.save(app, conversations.value)
+    }
+
+    fun importTextDocument(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val text = app.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    ?: throw IllegalStateException("Could not open this document")
+                // The model only holds ~2048 tokens, so a big document must be cut short or it errors out
+                val limit = 3_000
+                val clipped = text.take(limit) + if (text.length > limit) "\n\n[Document trimmed: only the first $limit characters are included]" else ""
+                val label = uri.lastPathSegment?.substringAfterLast('/') ?: "document"
+                pendingPrompt.value = "I imported the document '$label'. Help me understand it. Summarize the key points first, then answer based on its contents.\n\n$clipped"
+                screen.value = Screen.CHAT
+            } catch (e: Exception) {
+                pendingPrompt.value = "I could not read the selected text document. Please choose a .txt, .md, or .csv file. Error: ${e.message}"
+                screen.value = Screen.CHAT
+            }
+        }
+    }
+
+    fun exportChat(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                app.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { out ->
+                    out.appendLine("# ${currentTitle.value}")
+                    out.appendLine()
+                    messages.value.filter { it.text.isNotBlank() }.forEach { message ->
+                        out.appendLine(if (message.isUser) "## You" else "## Offline Gemma")
+                        out.appendLine()
+                        out.appendLine(message.text)
+                        out.appendLine()
+                    }
+                } ?: throw IllegalStateException("Could not create export file")
+            } catch (_: Exception) {
+                // The system document picker owns the destination; keep the chat usable on failure.
+            }
+        }
     }
 
     fun speak(text: String) {

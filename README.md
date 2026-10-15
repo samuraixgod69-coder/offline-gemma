@@ -46,7 +46,32 @@ File > Open > select this folder > wait for Gradle sync > Run (or Build > Build 
 - Won't load: file must be the MediaPipe `.task` file, not GGUF or safetensors.
 - Emulators are not supported by MediaPipe LLM; use a real phone.
 
-## v2 (glass UI)
-Glass-style dark UI, chat history saved on the phone, markdown replies, copy / read-aloud buttons,
-stop button, quick prompts, settings (temperature, max tokens, system prompt), model info screen, side drawer.
-Debug builds are now signed with the bundled app/debug.keystore so new versions install over old ones.
+## v2.2 (AI Toolbox update)
+- Added an AI Toolbox with **64 prompt tools** across learning, math, writing, languages, coding,
+  productivity, communication, career, science, research, everyday tasks, documents, and AI helpers.
+- Search tools by name/description and filter by category.
+- Tap a tool to place its prompt starter in the chat composer; add your own details before sending.
+- Existing features remain: offline model import/download, chat history, history search, markdown replies,
+  copy/read-aloud actions, stop generation, quick prompts, temperature/max-token/system-prompt settings,
+  model info, delete model, and navigation drawer.
+- Project version is 2.2 (versionCode 3). Debug builds use the bundled signing key so updates can install over
+  the same app when the previous build used this project's key.
+
+Note: The 64 toolbox items are prompt-based helpers powered by the locally loaded model, not 64 separate
+AI models. Answer quality and speed depend on the model file and available RAM. This source update has not
+been compiled or tested on a physical Android tablet in this environment.
+
+
+## v2.3 (voice, documents, export, and memory)
+- Voice input through Android's speech-recognition activity; recognition availability and language depend on installed device services.
+- Import plain-text, Markdown, CSV, or JSON documents into the chat as context (limited to the first 3,000 characters because the 1B model only holds about 2048 tokens). This is not a PDF text extractor.
+- Export the current conversation to a Markdown file using Android's save-file picker.
+- Optional private memory notes are stored in app preferences on the device and appended to the model's system instructions. Do not store passwords or sensitive details there.
+- Existing read-aloud, 64 prompt tools, offline model inference, and chat history are retained.
+
+The project source was updated but an Android build and physical-device test have not been run in this environment. Voice recognition may use an installed Android speech service and therefore is not guaranteed to work fully offline. Image understanding and PDF text extraction are not included in this version.
+
+
+## v2.3.1
+- Document import now trims to 3,000 characters (80,000 would overflow the model context and fail).
+- Drawer labels corrected (v2.3, 64 AI Tools).

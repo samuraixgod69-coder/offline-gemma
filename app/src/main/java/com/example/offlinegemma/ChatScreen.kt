@@ -1,6 +1,9 @@
 package com.example.offlinegemma
 
 import android.text.format.DateUtils
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -214,6 +218,7 @@ private fun MainShell(vm: ChatViewModel) {
         when (screen) {
             Screen.HOME -> HomeScreen(vm, openMenu)
             Screen.CHAT -> ChatScreen(vm)
+            Screen.TOOLS -> ToolsScreen(vm)
             Screen.MODELS -> ModelsScreen(vm)
             Screen.SETTINGS -> SettingsScreen(vm)
         }
@@ -237,12 +242,13 @@ private fun DrawerContent(vm: ChatViewModel, name: String, close: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         DrawerItem("✎", "New Chat") { vm.newChat(); vm.navigate(Screen.CHAT); close() }
         DrawerItem("🕘", "Chat History") { vm.navigate(Screen.HOME); close() }
+        DrawerItem("✦", "64 AI Tools") { vm.navigate(Screen.TOOLS); close() }
         DrawerItem("◆", "Models") { vm.navigate(Screen.MODELS); close() }
         DrawerItem("⚙", "Settings") { vm.navigate(Screen.SETTINGS); close() }
         Spacer(Modifier.height(20.dp))
         OfflineBadge()
         Spacer(Modifier.height(10.dp))
-        Text("Offline Gemma  v2.0", color = TextLo, fontSize = 12.sp)
+        Text("Offline Gemma  v2.3", color = TextLo, fontSize = 12.sp)
     }
 }
 
@@ -394,11 +400,39 @@ private fun ChatScreen(vm: ChatViewModel) {
     val messages by vm.messages.collectAsState()
     val generating by vm.generating.collectAsState()
     val title by vm.currentTitle.collectAsState()
+    val pendingPrompt by vm.pendingPrompt.collectAsState()
     val clipboard = LocalClipboardManager.current
     var input by remember { mutableStateOf("") }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importTextDocument(uri)
+    }
+    val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        if (uri != null) vm.exportChat(uri)
+    }
+    val speechPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (!spoken.isNullOrBlank()) input = listOf(input, spoken).filter { it.isNotBlank() }.joinToString(" ")
+    }
+    androidx.compose.runtime.LaunchedEffect(pendingPrompt) {
+        if (pendingPrompt != null) { input = pendingPrompt!!; vm.consumePendingPrompt() }
+    }
 
     Column(Modifier.fillMaxSize()) {
         TopBar(title, "Gemma 3 1B  ·  offline", "←", { vm.navigate(Screen.HOME) }, "＋") { vm.newChat() }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MiniAction("🎙 Voice input") {
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Offline Gemma")
+                }
+                try { speechPicker.launch(intent) } catch (_: Exception) { input = "Voice input is not available on this device. " + input }
+            }
+            MiniAction("📄 Import text") { documentPicker.launch(arrayOf("text/*", "application/json")) }
+            MiniAction("↗ Export chat") { exportPicker.launch("offline-gemma-chat.md") }
+        }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (messages.isEmpty()) {
@@ -521,6 +555,113 @@ private fun MiniAction(label: String, onClick: () -> Unit) {
         modifier = Modifier.glass(RoundedCornerShape(10.dp), 0.07f).clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp)
     )
+}
+
+// =====================================================================
+//  6. AI TOOLBOX: 60 ready-to-use offline prompt starters
+// =====================================================================
+private data class AiTool(val name: String, val category: String, val prompt: String, val description: String)
+
+private val aiTools = listOf(
+    AiTool("Explain simply", "Learning", "Explain this topic in very simple words, with an example: ", "Understand difficult ideas"),
+    AiTool("Teach me step by step", "Learning", "Teach me this step by step. Check for common mistakes: ", "Guided learning"),
+    AiTool("Make flashcards", "Learning", "Create question-and-answer flashcards from these notes: ", "Revision cards"),
+    AiTool("Create a quiz", "Learning", "Create a 10-question quiz with answers and explanations about: ", "Test your knowledge"),
+    AiTool("Study plan", "Learning", "Create a realistic study plan for this goal and available time: ", "Plan study sessions"),
+    AiTool("Exam answer", "Learning", "Write an exam-ready answer with headings and key points for: ", "Structured exam response"),
+    AiTool("Math solver", "Math", "Solve this math problem step by step and explain every step: ", "Show the working"),
+    AiTool("Check my solution", "Math", "Check my solution, identify any mistake, and show the correct steps: ", "Find errors"),
+    AiTool("Formula helper", "Math", "List the important formulas for this topic and explain when to use each: ", "Formula recap"),
+    AiTool("Practice problems", "Math", "Give me 10 practice problems on this topic from easy to difficult, with answers at the end: ", "Build confidence"),
+    AiTool("Essay writer", "Writing", "Help me write a clear essay about this topic with an introduction, body, and conclusion: ", "Essay outline and draft"),
+    AiTool("Paragraph improver", "Writing", "Improve this paragraph for clarity and flow while preserving my meaning: ", "Polish writing"),
+    AiTool("Grammar checker", "Writing", "Correct the grammar and spelling in this text, and briefly explain important corrections: ", "Fix language issues"),
+    AiTool("Make it shorter", "Writing", "Rewrite this text more concisely without losing important information: ", "Concise rewrite"),
+    AiTool("Make it professional", "Writing", "Rewrite this message in a polite, professional tone: ", "Professional tone"),
+    AiTool("Story starter", "Writing", "Create an original, engaging short story using this idea: ", "Creative writing"),
+    AiTool("Poem creator", "Writing", "Write an original poem inspired by this theme, with vivid imagery: ", "Poetry"),
+    AiTool("Telugu explanation", "Languages", "Explain this in simple Telugu. Keep important English technical words in brackets: ", "తెలుగులో వివరణ"),
+    AiTool("Translate to Telugu", "Languages", "Translate the following into natural Telugu and preserve the meaning: ", "English to Telugu"),
+    AiTool("Translate to English", "Languages", "Translate the following into clear, natural English: ", "Telugu or other text to English"),
+    AiTool("Vocabulary builder", "Languages", "Teach me 10 useful words related to this topic with meanings and example sentences: ", "Grow vocabulary"),
+    AiTool("Conversation practice", "Languages", "Role-play a friendly conversation to help me practise English. Start with this situation: ", "Language practice"),
+    AiTool("Code explainer", "Coding", "Explain what this code does line by line in beginner-friendly language: ", "Understand code"),
+    AiTool("Find code bug", "Coding", "Review this code for bugs. Explain the cause and suggest a corrected version: ", "Debugging helper"),
+    AiTool("Code comments", "Coding", "Add clear, useful comments to this code without changing its behavior: ", "Document code"),
+    AiTool("Write a function", "Coding", "Write a clean, beginner-friendly function for this requirement, with an example: ", "Code generation"),
+    AiTool("HTML starter", "Coding", "Create a complete single-file HTML/CSS/JavaScript example for this idea: ", "Web prototype"),
+    AiTool("App idea planner", "Coding", "Turn this app idea into a feature list, screen plan, and implementation steps: ", "Plan an app"),
+    AiTool("Summarizer", "Productivity", "Summarize the following into the key points and action items: ", "Quick summary"),
+    AiTool("Extract key points", "Productivity", "Extract the most important facts, dates, names, and decisions from this text: ", "Pull out details"),
+    AiTool("To-do list", "Productivity", "Turn this goal or brain dump into a prioritized, actionable checklist: ", "Organize tasks"),
+    AiTool("Decision helper", "Productivity", "Compare the options, list pros and cons, identify risks, and suggest a decision framework: ", "Think clearly"),
+    AiTool("Brainstorm ideas", "Productivity", "Brainstorm 20 practical, creative ideas for: ", "Idea generation"),
+    AiTool("Daily routine", "Productivity", "Design a balanced daily routine around these priorities and constraints: ", "Build a routine"),
+    AiTool("Goal breakdown", "Productivity", "Break this goal into small milestones and next actions: ", "Make progress"),
+    AiTool("Meeting notes", "Productivity", "Convert these rough notes into a summary, decisions, and action items: ", "Clean notes"),
+    AiTool("Email draft", "Communication", "Draft a clear, polite email about this situation: ", "Write an email"),
+    AiTool("Message reply", "Communication", "Suggest three natural replies to this message: ", "Reply ideas"),
+    AiTool("Make it friendly", "Communication", "Rewrite this to sound warmer and more friendly: ", "Friendly wording"),
+    AiTool("Make it persuasive", "Communication", "Improve this argument respectfully, using clear reasons and examples: ", "Persuasive writing"),
+    AiTool("Interview practice", "Career", "Act as an interviewer for this role. Ask one question at a time and give feedback: ", "Practise interviews"),
+    AiTool("Resume bullets", "Career", "Turn this experience into strong, truthful resume bullet points: ", "Resume writing"),
+    AiTool("Project planner", "Career", "Create a project plan with phases, deliverables, dependencies, and risks: ", "Organize a project"),
+    AiTool("Presentation outline", "Career", "Create a presentation outline with slide titles and speaker notes about: ", "Plan slides"),
+    AiTool("Science explainer", "Science", "Explain the science behind this topic and include a simple real-world example: ", "Science made clear"),
+    AiTool("Compare concepts", "Science", "Compare these concepts in a table with similarities, differences, and examples: ", "Understand differences"),
+    AiTool("History timeline", "Research", "Create a chronological timeline of the major events related to: ", "Timeline"),
+    AiTool("Research questions", "Research", "Suggest focused research questions and what evidence would help answer them about: ", "Start research"),
+    AiTool("Debate both sides", "Research", "Present the strongest reasonable arguments on both sides of this issue: ", "Balanced analysis"),
+    AiTool("Fact-check checklist", "Research", "Create a checklist for verifying the claims in this text. Do not assume they are true: ", "Evaluate claims"),
+    AiTool("Recipe ideas", "Everyday", "Suggest simple meal ideas using these ingredients and constraints: ", "Use what you have"),
+    AiTool("Travel planner", "Everyday", "Draft a practical trip plan based on this budget, duration, and interests: ", "Trip planning"),
+    AiTool("Gift ideas", "Everyday", "Suggest thoughtful gift ideas for this person, considering the budget and interests: ", "Gift brainstorming"),
+    AiTool("Hobby finder", "Everyday", "Suggest beginner-friendly hobbies based on these interests, time, and budget: ", "Find an activity"),
+    AiTool("Pros and cons", "Everyday", "Make a balanced pros-and-cons list for this choice and note what information is missing: ", "Compare choices"),
+    AiTool("Explain a document", "Documents", "Explain this document in plain language. Separate facts, obligations, and unclear parts: ", "Understand text"),
+    AiTool("Rewrite as bullets", "Documents", "Convert this content into well-organized bullet points: ", "Readable notes"),
+    AiTool("Create a checklist", "Documents", "Turn these requirements into a clear checklist with no duplicated items: ", "Track requirements"),
+    AiTool("Generate examples", "Learning", "Give me five different examples of this concept, from simple to advanced: ", "Learn through examples"),
+    AiTool("Teach a child", "Learning", "Explain this as if teaching a curious 10-year-old, using an analogy: ", "Simple explanation"),
+    AiTool("Advanced explanation", "Learning", "Give a deeper, technically accurate explanation of this topic and define key terms: ", "Go deeper"),
+    AiTool("Prospective questions", "Learning", "Create likely exam or interview questions on this topic, grouped by difficulty: ", "Prepare for questions"),
+    AiTool("Improve my prompt", "AI Helpers", "Improve this AI prompt so it is specific, clear, and likely to get a useful answer. Explain the changes: ", "Prompt engineering"),
+    AiTool("Role-play expert", "AI Helpers", "Act as a patient tutor. Ask clarifying questions when needed and help me with: ", "Guided role-play")
+)
+
+@Composable
+private fun ToolsScreen(vm: ChatViewModel) {
+    var query by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("All") }
+    val categories = listOf("All") + aiTools.map { it.category }.distinct()
+    val shown = aiTools.filter { (category == "All" || it.category == category) &&
+        (query.isBlank() || it.name.contains(query, true) || it.description.contains(query, true) || it.category.contains(query, true)) }
+    Column(Modifier.fillMaxSize()) {
+        TopBar("AI Toolbox", "${aiTools.size} prompt tools · works offline with your model", "←", { vm.navigate(Screen.HOME) })
+        Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().glass(RoundedCornerShape(16.dp))) {
+            TextField(value = query, onValueChange = { query = it }, singleLine = true,
+                placeholder = { Text("Search tools...", color = TextLo) }, modifier = Modifier.fillMaxWidth(), colors = transparentFieldColors())
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            categories.forEach { cat ->
+                Text(cat, color = if (category == cat) Color.White else TextLo,
+                    modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(if (category == cat) Accent.copy(alpha = .7f) else Color.White.copy(alpha = .06f))
+                        .clickable { category = cat }.padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 12.sp)
+            }
+        }
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            items(shown, key = { it.name }) { tool ->
+                Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(16.dp)).clickable { vm.preparePrompt(tool.prompt) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(tool.name, fontWeight = FontWeight.SemiBold)
+                        Text(tool.description, color = TextLo, fontSize = 12.sp)
+                        Text(tool.category, color = Color(0xFF9AAEFF), fontSize = 10.sp)
+                    }
+                    Text("Use  ↗", color = Color(0xFFB7C5FF), fontSize = 12.sp)
+                }
+            }
+        }
+    }
 }
 
 // =====================================================================
@@ -649,6 +790,19 @@ private fun SettingsScreen(vm: ChatViewModel) {
                         onValueChange = { draft = draft.copy(systemPrompt = it); saved = false },
                         maxLines = 6,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
+                        colors = transparentFieldColors()
+                    )
+                }
+            }
+            SettingsCard("Private AI memory notes") {
+                Text("Optional notes saved only on this device. They are added to the model instructions for future chats; avoid passwords or sensitive information.", color = TextLo, fontSize = 12.sp)
+                Box(Modifier.fillMaxWidth().glass(RoundedCornerShape(14.dp), 0.06f)) {
+                    TextField(
+                        value = draft.memoryNotes,
+                        onValueChange = { draft = draft.copy(memoryNotes = it); saved = false },
+                        placeholder = { Text("Example: Explain difficult topics in simple Telugu...") },
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                         colors = transparentFieldColors()
                     )
                 }
